@@ -4,7 +4,10 @@ import sys
 from ytmusicapi import YTMusic
 import os
 
-# Change to playlist ID to download. Can be extracted from the URL: https://music.youtube.com/playlist?list=<PlaylistID>
+# Note: You must export your google cookies into ~/Downloads/cookies.txt first (Netscape cookie format, e.g. with Export
+# cookies Firefox plugin)!
+
+# Add playlist ID to download. Can be extracted from the URL: https://music.youtube.com/playlist?list=<PlaylistID>
 if len(sys.argv) != 2 :
   print("Playlist ID missing!")
   sys.exit(1)
@@ -31,6 +34,6 @@ for track in l["tracks"] :
     continue
   
   os.system("rm -f tempdownload.*")
-  os.system("youtube-dl https://music.youtube.com/watch?v="+videoId+" -o tempdownload")
+  os.system("youtube-dl https://music.youtube.com/watch?v="+videoId+" -o tempdownload --cookies=~/Downloads/cookies.txt")
   os.system("ffmpeg -i tempdownload.* -vn -b:a 192K '"+filename+"'")
 
