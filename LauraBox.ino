@@ -107,9 +107,9 @@ const int maxPathLength = 512;
 const unsigned int runMaxMinutes = 120;
 
 // Maximum allowed playback volume (cannot be bigger than 20)
-const unsigned int maxVolume = 8;
+const unsigned int maxVolume = 12;
 
-std::recursive_mutex mx_audio;
+//std::recursive_mutex mx_audio;
 Audio audio;
 SPIClass sdspi(VSPI);
 
@@ -147,7 +147,7 @@ void runAudioLoop(void *parameter = nullptr) {
   delay(100);
   while (true) {
     {
-      std::lock_guard<std::recursive_mutex> lk(mx_audio);
+      //std::lock_guard<std::recursive_mutex> lk(mx_audio);
       audio.loop();
     }
     delay(1);
@@ -235,7 +235,7 @@ void updatePlaylists(void *parameter = nullptr) {
   size_t pos1 = 0;
   while( (pos1 = bodyToParse.find_first_of("\n", pos0)) != std::string::npos ) {
     // get the line and update the bodyToParse
-    auto line = bodyToParse.substr(pos0, pos1);
+    auto line = bodyToParse.substr(pos0, pos1-pos0);
     pos0 = pos1+1;
 
     // extract track size and name
@@ -243,20 +243,27 @@ void updatePlaylists(void *parameter = nullptr) {
     size_t tracksize = std::stoi(line.substr(0, separator));
     String track = line.substr(separator+1).c_str();
 
+    Serial.print("Checking track "+track);
+
     // check if file needs to be downloaded (does not exist or size differs)
     bool download = false;
-    if (SD.exists("/" + track)) {
+    if(SD.exists("/" + track)) {
       auto f = SD.open("/" + track, FILE_READ);
-      if (f.size() != tracksize) {
+      if(f.size() != tracksize) {
+        Serial.println(" -> size mismatch, downloading...");
         download = true;
+      }
+      else {
+        Serial.println(" -> ok");
       }
       f.close();
     }
     else {
+      Serial.println(" -> does not exist, downloading...");
       download = true;
     }
 
-    if (download) {
+    if(download) {
       // Play message
       if (firstFile) {
         firstFile = false;
@@ -285,7 +292,7 @@ void updatePlaylists(void *parameter = nullptr) {
 
         // Save file
         auto f = SD.open("/" + track, FILE_WRITE);
-        for (auto i = 0; i < bodyLen; i += blockSize) {
+        for(auto i = 0; i < bodyLen; i += blockSize) {
 
           // print progress to serial
           if (i % (blockSize * 100) == 0) {
@@ -470,7 +477,7 @@ void setup() {
   audio.setPinout(I2S_SCK, I2S_LRCK, I2S_DOUT);
 
   // create task for audio loop (on a dedicated core)
-  std::lock_guard<std::recursive_mutex> lk(mx_audio);  // prevent audio loop until setup is complete
+  //std::lock_guard<std::recursive_mutex> lk(mx_audio);  // prevent audio loop until setup is complete
   xTaskCreatePinnedToCore(runAudioLoop, "runAudioLoop", 10000, NULL, 3, NULL, 0);
   xTaskCreatePinnedToCore(limitRuntime, "limitRuntime", 2000, NULL, 4, NULL, 1);
 
@@ -554,13 +561,13 @@ void voiceMessage(String file) {
   }
 
   {
-    std::lock_guard<std::recursive_mutex> lk(mx_audio);
+    //std::lock_guard<std::recursive_mutex> lk(mx_audio);
     audio.stopSong();
   }
   while (audio.isRunning()) delay(1);
 
   {
-    std::lock_guard<std::recursive_mutex> lk(mx_audio);
+    //std::lock_guard<std::recursive_mutex> lk(mx_audio);
     audio.setVolume(2);
     audio.connecttoFS(SPIFFS, (file + ".mp3").c_str());
   }
@@ -629,12 +636,12 @@ void play() {
     if (!SD.exists("/" + uri)) {
       voiceError("error");
     }
-    std::lock_guard<std::recursive_mutex> lk(mx_audio);
+    //std::lock_guard<std::recursive_mutex> lk(mx_audio);
     isStreaming = false;
     audio.connecttoSD(uri.c_str());
   } else {
     if (!isStreaming) connectWifi();
-    std::lock_guard<std::recursive_mutex> lk(mx_audio);
+    //std::lock_guard<std::recursive_mutex> lk(mx_audio);
     isStreaming = true;
     audio.connecttohost(uri.c_str());
   }
@@ -681,14 +688,14 @@ void runMainLoop(void *) {
       if (detected_card_id == 0) {
         Serial.println("Card lost.");
         {
-          std::lock_guard<std::recursive_mutex> lk(mx_audio);
+          //std::lock_guard<std::recursive_mutex> lk(mx_audio);
           if (audio.isRunning() && !isMessage) audio.pauseResume();
 
           // store current position in RTC memory, to allow resuming if same card is read again
           ulp_last_card_id = active_card_id;
           ulp_last_track = track;
           if (!isStreaming) {
-            ulp_last_file_position = audio.getFilePos();
+            ulp_last_file_position = audio.getAudioCurrentTime();
           } else {
             ulp_last_file_position = 0;
           }
@@ -742,16 +749,26 @@ void runMainLoop(void *) {
         {
           std::unique_lock<std::mutex> lk(mx_playlist_and_track);
           track = ulp_last_track;
-          if (playlist.size() < track + 1) track = 0;
+          Serial.print("Track = ");
+          Serial.println(track);
+          if (playlist.size() < track + 1) {
+            track = 0;
+            ulp_last_file_position = 0;
+          }
           if (playlist.size() < 1) {
             lk.unlock();
             voiceError("unknown_id");
           }
         }
         {
-          std::lock_guard<std::recursive_mutex> lk(mx_audio);
+          Serial.print("ulp_last_file_position = ");
+          Serial.println(ulp_last_file_position);
+          //std::lock_guard<std::recursive_mutex> lk(mx_audio);
           play();
-          audio.setFilePos(ulp_last_file_position);
+          //usleep(1);
+          //audio.loop();
+          //usleep(1);
+          //audio.setAudioPlayPosition(ulp_last_file_position);
         }
       }
     }
@@ -759,14 +776,14 @@ void runMainLoop(void *) {
     // Check for button commands
     if (volumeUp.isCommandPending()) {
       if (ulp_current_volume < maxVolume) ulp_current_volume++;
-      std::lock_guard<std::recursive_mutex> lk(mx_audio);
+      //std::lock_guard<std::recursive_mutex> lk(mx_audio);
       audio.setVolume(ulp_current_volume);
       Serial.print("Volume up: ");
       Serial.println(ulp_current_volume);
     }
     if (volumeDown.isCommandPending()) {
       if (ulp_current_volume > 1) ulp_current_volume--;
-      std::lock_guard<std::recursive_mutex> lk(mx_audio);
+      //std::lock_guard<std::recursive_mutex> lk(mx_audio);
       audio.setVolume(ulp_current_volume);
       Serial.print("Volume down: ");
       Serial.println(ulp_current_volume);
