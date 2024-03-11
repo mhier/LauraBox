@@ -3,16 +3,15 @@
 //
 // Change Board to "ESP32 Dev Module".
 //
-// Need to change this in ".arduino15/packages/esp32/hardware/esp32/1.0.4/tools/sdk/include/config/sdkconfig.h":
-// #define CONFIG_ULP_COPROC_RESERVE_MEM 2048
+// Need to change this in ".arduino15/packages/esp32/hardware/esp32/2.0.11/tools/sdk/esp32/qio_qspi/include/sdkconfig.h":
+// #define CONFIG_ESP32_ULP_COPROC_RESERVE_MEM 2048
 //
 // Need to install EPS32-audioI2S from here (download as ZIP, add via Sketch/Include Library)
 // https://github.com/schreibfaul1/ESP32-audioI2S/
 //
 // Install ArduinoHttpClient library through Library Manager.
 //
-// Install the ulptool: https://github.com/duff2013/ulptool
-// Note: On newer systems Python 2 might no longer work. Python 3 support is around the corner, see: https://github.com/duff2013/ulptool/pull/67
+// Install the ulptool (my fork for compatibilty with latest tools): https://github.com/mhier/ulptool
 //
 
 
