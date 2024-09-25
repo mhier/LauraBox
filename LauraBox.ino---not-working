@@ -1,11 +1,11 @@
 //
-// Use Arduino 1.8.19 (from flatpak cc.arduino.arduinoide)
+// Configure ESP32 Arduino support: https://github.com/espressif/arduino-esp32
 //
-// Configure ESP32 Arduino support: https://github.com/espressif/arduino-esp32 - Use version 2.0.11
+// NOTE: Curently incompatible with version 3.x of the esp32 support, stick with version 2.0.17 for now!
 //
-// Change Board to "ESP32 Dev Module". Set "Arduion runs on" and "Events run on" both to "Core 1" (should be default)
+// Change Board to "ESP32 Dev Module".
 //
-// Need to change this in ".arduino15/packages/esp32/hardware/esp32/2.0.11/tools/sdk/esp32/qio_qspi/include/sdkconfig.h":
+// Need to change this in ".arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32/qio_qspi/include/sdkconfig.h":
 // #define CONFIG_ESP32_ULP_COPROC_RESERVE_MEM 2048
 //
 // Need to install EPS32-audioI2S from here (download as ZIP, add via Sketch/Include Library)
@@ -14,8 +14,6 @@
 // Install ArduinoHttpClient library through Library Manager.
 //
 // Install the ulptool (my fork for compatibilty with latest tools): https://github.com/mhier/ulptool
-//
-// Install ESP32 File Uploader: https://github.com/me-no-dev/arduino-esp32fs-plugin/tree/1.1
 //
 
 
@@ -28,14 +26,17 @@
 #include "SD.h"
 #include "FS.h"
 #include <SPI.h>
-#include "SPIFFS.h"
+//#include "SPIFFS.h"
 
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <WiFiClient.h>
-#include <ArduinoHttpClient.h>
+//#include <ArduinoHttpClient.h>
+
+//#include "SdFat.h"
+//#include <SimpleFTPServer.h>
 
 #include <thread>
 #include <atomic>
@@ -139,39 +140,14 @@ void disconnectWifi();
 String urlencode(String str);
 
 // Buffer for downloading files
-const int blockSize = 2048;
+const int blockSize = 1024;
 uint8_t buffer[blockSize];
 
 unsigned long idleTime = 0;
 
-
-StaticTask_t xTcbMainLoop;
-constexpr size_t sStackMainLoop{3000};
-StackType_t xStackMainLoop[sStackMainLoop];
-TaskHandle_t hMainLoop;
-
-StaticTask_t xTcbAudioLoop;
-constexpr size_t sStackAudioLoop{2000};
-StackType_t xStackAudioLoop[sStackAudioLoop];
-TaskHandle_t hAudioLoop;
-
-StaticTask_t xTcbLimitRuntime;
-constexpr size_t sStackLimitRuntime{650};
-StackType_t xStackLimitRuntime[sStackLimitRuntime];
-TaskHandle_t hLimitRuntime;
-
-StaticTask_t xTcbUpdate;
-constexpr size_t sStackUpdate{5000};
-StackType_t xStackUpdate[sStackUpdate];
-TaskHandle_t hUpdate;
-
-static_assert(sizeof(StackType_t) == 1);
-
-WiFiClient wifiClient;
-HttpClient httpClient(wifiClient, serverAddress, 80);
-
-void voiceMessage(String file);
-
+//SdSpiConfig sdConfig(SD_CS, 50);
+//SdFs sd;
+//FtpServer ftpSrv;
 
 /**************************************************************************************************************/
 
@@ -198,22 +174,22 @@ void setupOTA() {
         type = "filesystem";
 
 
-      SPIFFS.end();
-      Serial.println("Start updating " + type);
+      //SPIFFS.end();
+      // Serial.println("Start updating " + type);
     })
     .onEnd([]() {
-      Serial.println("\nEnd");
+      // Serial.println("\nEnd");
     })
     .onProgress([](unsigned int progress, unsigned int total) {
-      Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+      // Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
     })
     .onError([](ota_error_t error) {
-      Serial.printf("Error[%u]: ", error);
-      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+      // Serial.printf("Error[%u]: ", error);
+      /*if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
       else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
       else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
       else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-      else if (error == OTA_END_ERROR) Serial.println("End Failed");
+      else if (error == OTA_END_ERROR) Serial.println("End Failed");*/
     })
     .setHostname("LauraBox")
     .setPort(3232);
@@ -226,74 +202,9 @@ void setupOTA() {
 }
 
 /**************************************************************************************************************/
-
-void downloadFile(const String& filename) {
-
-  // Start download of the track file
-  httpClient.get(urlencode("/" + filename));
-  int httpCode = httpClient.responseStatusCode();
-  if (httpCode >= 200 && httpCode <= 299) {
-    httpClient.skipResponseHeaders();
-    auto bodyLen = httpClient.contentLength();
-
-    Serial.println("Downloading '/" + filename + "'...");
-
-    // Create directories
-    for (int i = 0; i < filename.length(); ++i) {
-      if (filename[i] == '/') {
-        SD.mkdir("/" + filename.substring(0, i));
-      }
-    }
-
-    // Save file
-    auto f = SD.open("/" + filename, FILE_WRITE);
-    for(auto i = 0; i < bodyLen; i += blockSize) {
-
-      // print progress to serial
-      if (i % (blockSize * 500) == 0) {
-        delay(1);  // prevent idle task to never run and trigger the watchdog...
-        Serial.print(i / 1024);
-        Serial.print("/");
-        Serial.print(bodyLen / 1024);
-        Serial.println(" kiB");
-        //voiceMessage("plopp");
-      }
-
-      // wait until enough data is available
-      int nBytesToRead = min(int(bodyLen - i), blockSize);
-      int itocount = 0;
-      while (httpClient.available() < nBytesToRead) {
-        delay(100);
-        if (!httpClient.connected() || ++itocount > 300) {
-          Serial.print("Error downloading '/" + filename + "': timeout.");
-          voiceMessage("error");
-          vTaskDelete(NULL);
-        }
-      }
-
-      // read from http stream
-      httpClient.read(buffer, nBytesToRead);
-
-      // write to SD card
-      f.write(buffer, nBytesToRead);
-    }
-    f.close();
-  }
-  else {
-    Serial.print("Error downloading '/");
-    Serial.print(track);
-    Serial.print("': ");
-    Serial.println(httpCode);
-    voiceMessage("error");
-    vTaskDelete(NULL);
-  }
-
-}
-
-/**************************************************************************************************************/
-
+#if 0
 void updatePlaylists(void *parameter = nullptr) {
-  Serial.printf("updatePlaylists!\n");
+
   // flag whether the file downloaded is the first or not, allows to produce different voice messages
   bool firstFile = true;
 
@@ -304,24 +215,42 @@ void updatePlaylists(void *parameter = nullptr) {
     vTaskDelete(NULL);
   }
 
-  Serial.println("Open HTTP connection...");
+  WiFiClient c;
+  HttpClient httpManifest(c, serverAddress, 80);
 
   // download playlist
   Serial.println("Downloading manifest...");
 
-  downloadFile("manifest");
-  auto manifest = SD.open("/manifest");
+  httpManifest.get("/manifest");
+  int httpCode = httpManifest.responseStatusCode();
+  if (httpCode < 200 && httpCode > 299) {
+    Serial.print("Http error: ");
+    Serial.println(httpCode);
+    voiceMessage("error");
+    vTaskDelete(NULL);
+  }
+  Serial.println("Found online, starting download...");
+  auto body = httpManifest.responseBody();
+  if (body == "NOT FOUND\n") {
+    Serial.println("Not found!");
+    voiceMessage("error");
+    vTaskDelete(NULL);
+  }
+  httpManifest.stop();
 
   // parse manifest line by line (this assumes a new line at the end of the file)
-  auto lastDing = millis();
-  while( manifest.available() ) {
+  std::string bodyToParse(body.c_str());
+  size_t pos0 = 0;
+  size_t pos1 = 0;
+  while( (pos1 = bodyToParse.find_first_of("\n", pos0)) != std::string::npos ) {
     // get the line and update the bodyToParse
-    auto line = manifest.readStringUntil('\n');
+    auto line = bodyToParse.substr(pos0, pos1-pos0);
+    pos0 = pos1+1;
 
     // extract track size and name
-    auto separator = line.indexOf(" ");
-    size_t tracksize = line.substring(0, separator).toInt();
-    String track = line.substring(separator+1);
+    auto separator = line.find_first_of(" ");
+    size_t tracksize = std::stoi(line.substr(0, separator));
+    String track = line.substr(separator+1).c_str();
 
     Serial.print("Checking track "+track);
 
@@ -343,20 +272,78 @@ void updatePlaylists(void *parameter = nullptr) {
       download = true;
     }
 
-    if(millis() - lastDing > 10000) {
-      voiceMessage("ding");
-      lastDing = millis();
-    }
-    
     if(download) {
       // Play message
-      downloadFile(track);
+      if (firstFile) {
+        firstFile = false;
+        voiceMessage("download");
+      }
+      else {
+        voiceMessage("download_progress");
+      }
+
+      // Start download of the track file
+      HttpClient httpTrack(c, serverAddress, 80);
+      httpTrack.get(urlencode("/" + track));
+      int httpCode = httpTrack.responseStatusCode();
+      if (httpCode >= 200 && httpCode <= 299) {
+        httpTrack.skipResponseHeaders();
+        auto bodyLen = httpTrack.contentLength();
+
+        Serial.println("Downloading '" + track + "'...");
+
+        // Create directories
+        for (int i = 0; i < track.length(); ++i) {
+          if (track[i] == '/') {
+            SD.mkdir("/" + track.substring(0, i));
+          }
+        }
+
+        // Save file
+        auto f = SD.open("/" + track, FILE_WRITE);
+        for(auto i = 0; i < bodyLen; i += blockSize) {
+
+          // print progress to serial
+          if (i % (blockSize * 100) == 0) {
+            delay(1);  // prevent idle task to never run and trigger the watchdog...
+            Serial.print(i / 1024);
+            Serial.print("/");
+            Serial.print(bodyLen / 1024);
+            Serial.println(" kiB");
+          }
+
+          // wait until enough data is available
+          int nBytesToRead = std::min(int(bodyLen - i), blockSize);
+          int itocount = 0;
+          while (httpTrack.available() < nBytesToRead) {
+            delay(100);
+            if (!httpTrack.connected() || ++itocount > 300) {
+              Serial.print("Error downloading '" + track + "': timeout.");
+              voiceMessage("error");
+              vTaskDelete(NULL);
+            }
+          }
+
+          // read from http stream
+          httpTrack.read(buffer, nBytesToRead);
+
+          // write to SD card
+          f.write(buffer, nBytesToRead);
+        }
+        f.close();
+        httpTrack.stop();
+      }
+      else {
+        Serial.print("Error downloading '" + track + "': ");
+        Serial.println(httpCode);
+        voiceMessage("error");
+        vTaskDelete(NULL);
+      }
     }
 
     // abort if battery low
 #ifndef TEST
     if (ulp_vbatt_low & 0xFFFF) {
-      Serial.println("*** LOW BATTERY, aborting updater...");
       disconnectWifi();
       vTaskDelete(NULL);
     }
@@ -370,6 +357,7 @@ void updatePlaylists(void *parameter = nullptr) {
   voiceMessage("download_finished");
   vTaskDelete(NULL);
 }
+#endif
 
 /**************************************************************************************************************/
 
@@ -387,6 +375,7 @@ void powerOff() {
   // enable wakeup by ULP
   ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
   Serial.flush();
+  delay(10);
   esp_deep_sleep_start();
   // this never returns, the ESP32 is reset after deep sleep, hence setup() is called after wakeup
 }
@@ -421,23 +410,23 @@ static void init_ulp_program(bool firstBoot) {
   adc1_ulp_enable();
 
   err = rtc_gpio_init(GPIO_NFC_SDA);
-  if (err != ESP_OK) Serial.printf("GPIO_NFC_SDA not ok for RTC\n");
+  //if (err != ESP_OK) Serial.printf("GPIO_NFC_SDA not ok for RTC\n");
   rtc_gpio_set_direction(GPIO_NFC_SDA, RTC_GPIO_MODE_OUTPUT_ONLY);
 
   err = rtc_gpio_init(GPIO_NFC_RST);
-  if (err != ESP_OK) Serial.printf("GPIO_NFC_RST not ok for RTC\n");
+  //if (err != ESP_OK) Serial.printf("GPIO_NFC_RST not ok for RTC\n");
   rtc_gpio_set_direction(GPIO_NFC_RST, RTC_GPIO_MODE_OUTPUT_ONLY);
 
   err = rtc_gpio_init(GPIO_NFC_MOSI);
-  if (err != ESP_OK) Serial.printf("GPIO_NFC_MOSI not ok for RTC\n");
+  //if (err != ESP_OK) Serial.printf("GPIO_NFC_MOSI not ok for RTC\n");
   rtc_gpio_set_direction(GPIO_NFC_MOSI, RTC_GPIO_MODE_OUTPUT_ONLY);
 
   err = rtc_gpio_init(GPIO_NFC_MISO);
-  if (err != ESP_OK) Serial.printf("GPIO_NFC_MISO not ok for RTC\n");
+  //if (err != ESP_OK) Serial.printf("GPIO_NFC_MISO not ok for RTC\n");
   rtc_gpio_set_direction(GPIO_NFC_MISO, RTC_GPIO_MODE_INPUT_ONLY);
 
   err = rtc_gpio_init(GPIO_NFC_SCK);
-  if (err != ESP_OK) Serial.printf("GPIO_NFC_SCK not ok for RTC\n");
+  //if (err != ESP_OK) Serial.printf("GPIO_NFC_SCK not ok for RTC\n");
   rtc_gpio_set_direction(GPIO_NFC_SCK, RTC_GPIO_MODE_OUTPUT_ONLY);
 }
 
@@ -464,7 +453,7 @@ uint32_t readCardIdFromULP() {
 /**************************************************************************************************************/
 
 void clearSD() {
-  Serial.println("Resetting SD card...");
+  //Serial.println("Resetting SD card...");
   byte sd = 0;
   digitalWrite(SD_CS, LOW);
   size_t nRetry = 0;
@@ -472,7 +461,7 @@ void clearSD() {
     sd = sdspi.transfer(255);
     delay(10);
     if (++nRetry > 100) {
-      Serial.println("Giving up!");
+      //Serial.println("Giving up!");
       break;
     }
   }
@@ -488,23 +477,23 @@ void setup() {
   Serial.begin(115200);
 
   // configure power control pin
-  Serial.printf("Power on SD+Audio\n");
+  //Serial.printf("Power on SD+Audio\n");
   pinMode(POWER_CTRL, OUTPUT);
   pinMode(AMP_ENA, OUTPUT);
   digitalWrite(AMP_ENA, LOW);
   digitalWrite(POWER_CTRL, HIGH);
 
   // Configure audo interface
-  Serial.printf("Setup audio\n");
+  //Serial.printf("Setup audio\n");
   audio.setPinout(I2S_SCK, I2S_LRCK, I2S_DOUT);
 
   // create task for audio loop (on a dedicated core)
   //std::lock_guard<std::recursive_mutex> lk(mx_audio);  // prevent audio loop until setup is complete
-  hAudioLoop = xTaskCreateStaticPinnedToCore(runAudioLoop, "runAudioLoop", sStackAudioLoop, NULL, 3, xStackAudioLoop, &xTcbAudioLoop, 0);
-  hLimitRuntime = xTaskCreateStaticPinnedToCore(limitRuntime, "limitRuntime", sStackLimitRuntime, NULL, 4, xStackLimitRuntime, &xTcbLimitRuntime, 1);
+  xTaskCreatePinnedToCore(runAudioLoop, "runAudioLoop", 10000, NULL, 3, NULL, 0);
+  xTaskCreatePinnedToCore(limitRuntime, "limitRuntime", 2000, NULL, 4, NULL, 1);
 
   // Setup SD card (done always to make sure SD card is in sleep mode after reset)
-  Serial.printf("Setup SD\n");
+  //Serial.printf("Setup SD\n");
   pinMode(SD_CS, OUTPUT);
   size_t nRetrySD = 0;
 retry_sd:
@@ -527,8 +516,8 @@ retry_sd:
 #endif
   }
   Serial.printf("ULP wakeup.\n");
-  Serial.print("VBATT: ");
-  Serial.println(ulp_vbatt & 0xFFFF);
+  //Serial.print("VBATT: ");
+  //Serial.println(ulp_vbatt & 0xFFFF);
 
   // inform ULP we are awake
   ulp_main_cpu_sleeps = 0;
@@ -538,26 +527,26 @@ retry_sd:
 
   // set audio volume
   audio.setVolume(ulp_current_volume);  // 0...21
-  Serial.print("Volume: ");
-  Serial.println(ulp_current_volume);
+  //Serial.print("Volume: ");
+  //Serial.println(ulp_current_volume);
 
   // Setup timer for scanning the input buttons
-  Serial.printf("Setup input timer\n");
+  //Serial.printf("Setup input timer\n");
   timer = timerBegin(0, 80, true);  // prescaler 1/80 -> count microseconds
   timerAttachInterrupt(timer, &onTimer, true);
   timerAlarmWrite(timer, 10000, true);  // alarm every 10000 microseconds -> 100 Hz
   timerAlarmEnable(timer);
 
   // Setup input pins for push buttons
-  Serial.printf("Setup input buttons\n");
+  //Serial.printf("Setup input buttons\n");
   for (auto b : buttonList) b->setup();
 
-  Serial.printf("Enable amplifier\n");
+  //Serial.printf("Enable amplifier\n");
   delay(500);
   digitalWrite(AMP_ENA, HIGH);
 
   // create task for main loop - we do not use the arduino loop(), because it makes problems if too much time is spent inside.
-  hMainLoop = xTaskCreateStaticPinnedToCore(runMainLoop, "runMainLoop", sStackMainLoop, NULL, 0, xStackMainLoop, &xTcbMainLoop, 1);
+  xTaskCreatePinnedToCore(runMainLoop, "runMainLoop", 10000, NULL, 0, NULL, 1);
 
   Serial.printf("Init complete.\n");
 }
@@ -573,14 +562,16 @@ void voiceError(String file) {
 
 void voiceMessage(String file) {
   Serial.println("Message: " + file);
+  powerOff();
+  /*
   isMessage = true;
 
   digitalWrite(AMP_ENA, HIGH);
 
-  if (!SPIFFS.begin()) {
-    Serial.println("SPIFFS Mount Failed");
-    powerOff();
-  }
+  //if (!SPIFFS.begin()) {
+    // Serial.println("SPIFFS Mount Failed");
+  //  powerOff();
+ // }
 
   {
     //std::lock_guard<std::recursive_mutex> lk(mx_audio);
@@ -594,6 +585,7 @@ void voiceMessage(String file) {
     audio.connecttoFS(SPIFFS, (file + ".mp3").c_str());
   }
   while (audio.isRunning()) delay(1);
+*/
 }
 
 /**************************************************************************************************************/
@@ -606,11 +598,11 @@ void IRAM_ATTR onTimer() {
 
 bool connectWifi(bool required) {
   if (wifiUseCount++ == 0) {
-    Serial.println("Connecting WIFI...");
+    // Serial.println("Connecting WIFI...");
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid.c_str(), password.c_str());
   }
-  Serial.print("Waiting for WIFI...");
+  // Serial.print("Waiting for WIFI...");
   size_t cTimeOut = 0;
   while (WiFi.status() != WL_CONNECTED) {
     if (++cTimeOut > 60) {
@@ -619,8 +611,8 @@ bool connectWifi(bool required) {
     }
     delay(500);
   }
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+  // Serial.print("IP address: ");
+  // Serial.println(WiFi.localIP());
   return true;
 }
 
@@ -628,7 +620,7 @@ bool connectWifi(bool required) {
 
 void disconnectWifi() {
   if (--wifiUseCount == 0) {
-    Serial.println("Disconnecting WIFI...");
+    // Serial.println("Disconnecting WIFI...");
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
   }
@@ -651,7 +643,7 @@ void play() {
   }
 
 
-  Serial.println("Play: " + uri);
+  // Serial.println("Play: " + uri);
 
   if (!uri.startsWith("http://") && !uri.startsWith("https://")) {
     if (isStreaming) disconnectWifi();
@@ -672,7 +664,7 @@ void play() {
 /**************************************************************************************************************/
 
 void runMainLoop(void *) {
-  Serial.printf("runMainLoop started.\n");
+  // Serial.printf("runMainLoop started.\n");
 
   while (true) {
     delay(10);
@@ -687,6 +679,7 @@ void runMainLoop(void *) {
     // Handle update mode
     if (isUpdateMode) {
       ArduinoOTA.handle();
+      //ftpSrv.handleFTP();
     }
 
     // read current card
@@ -696,7 +689,9 @@ void runMainLoop(void *) {
     if (detected_card_id == updateCard) {
       if (!isUpdateMode) {
         setupOTA();
-        hUpdate = xTaskCreateStaticPinnedToCore(updatePlaylists, "updatePlaylists", sStackUpdate, NULL, 0, xStackUpdate, &xTcbUpdate, 0);
+        //sd.begin(sdConfig);
+        //ftpSrv.begin("laurabox","esp32");
+        //xTaskCreatePinnedToCore(updatePlaylists, "updatePlaylists", 10000, NULL, 0, NULL, 1);
       }
       continue;
     }
@@ -708,7 +703,7 @@ void runMainLoop(void *) {
     // Check if card lost or changed. Will also be executed right after wakup from ULP.
     if (active_card_id != detected_card_id) {
       if (detected_card_id == 0) {
-        Serial.println("Card lost.");
+        // Serial.println("Card lost.");
         {
           //std::lock_guard<std::recursive_mutex> lk(mx_audio);
           if (audio.isRunning() && !isMessage) audio.pauseResume();
@@ -730,9 +725,9 @@ void runMainLoop(void *) {
       while (id.length() < 8) {
         id = "0" + id;
       }
-      Serial.print("Card detected: ");
-      Serial.print(id);
-      Serial.println(".");
+      // Serial.print("Card detected: ");
+      // Serial.print(id);
+      // Serial.println(".");
 
 
       // Read playlist from SD card
@@ -742,16 +737,16 @@ void runMainLoop(void *) {
       }
 
       // read playlist from file
-      Serial.println("TRACKLIST BEGIN");
+      // Serial.println("TRACKLIST BEGIN");
       while (f.available()) {
         auto track = f.readStringUntil('\n');
-        Serial.println(track);
+        // Serial.println(track);
         if (track.length() > maxPathLength) continue;
         if (track[track.length() - 1] == '\r') track = track.substring(0, track.length() - 1);
         std::lock_guard<std::mutex> lk(mx_playlist_and_track);
         playlist.push_back(track);
       }
-      Serial.println("TRACKLIST END");
+      // Serial.println("TRACKLIST END");
       f.close();
 
       // Start playing first track
@@ -760,19 +755,19 @@ void runMainLoop(void *) {
           std::unique_lock<std::mutex> lk(mx_playlist_and_track);
           track = 0;
           if (playlist.size() < 1) {
-            Serial.println("No tracks on playlist.");
+            // Serial.println("No tracks on playlist.");
             lk.unlock();
             voiceError("unknown_id");
           }
         }
         play();
       } else {
-        Serial.println("Resuming.");
+        // Serial.println("Resuming.");
         {
           std::unique_lock<std::mutex> lk(mx_playlist_and_track);
           track = ulp_last_track;
-          Serial.print("Track = ");
-          Serial.println(track);
+          // Serial.print("Track = ");
+          // Serial.println(track);
           if (playlist.size() < track + 1) {
             track = 0;
             ulp_last_file_position = 0;
@@ -783,8 +778,8 @@ void runMainLoop(void *) {
           }
         }
         {
-          Serial.print("ulp_last_file_position = ");
-          Serial.println(ulp_last_file_position);
+          // Serial.print("ulp_last_file_position = ");
+          // Serial.println(ulp_last_file_position);
           //std::lock_guard<std::recursive_mutex> lk(mx_audio);
           play();
           //usleep(1);
@@ -800,15 +795,15 @@ void runMainLoop(void *) {
       if (ulp_current_volume < maxVolume) ulp_current_volume++;
       //std::lock_guard<std::recursive_mutex> lk(mx_audio);
       audio.setVolume(ulp_current_volume);
-      Serial.print("Volume up: ");
-      Serial.println(ulp_current_volume);
+      // Serial.print("Volume up: ");
+      // Serial.println(ulp_current_volume);
     }
     if (volumeDown.isCommandPending()) {
       if (ulp_current_volume > 1) ulp_current_volume--;
       //std::lock_guard<std::recursive_mutex> lk(mx_audio);
       audio.setVolume(ulp_current_volume);
-      Serial.print("Volume down: ");
-      Serial.println(ulp_current_volume);
+      // Serial.print("Volume down: ");
+      // Serial.println(ulp_current_volume);
     }
     if (trackNext.isCommandPending()) {
       std::unique_lock<std::mutex> lk(mx_playlist_and_track);
@@ -832,7 +827,7 @@ void runMainLoop(void *) {
       if (idleTime == 0) {
         idleTime = millis();
       } else if (millis() - idleTime > 2000) {
-        Serial.println("Nothing playing or downloading.");
+        // Serial.println("Nothing playing or downloading.");
         powerOff();
       }
     } else {
@@ -844,12 +839,12 @@ void runMainLoop(void *) {
 /**************************************************************************************************************/
 
 void audio_eof_mp3(const char *info) {  //end of file
-  Serial.print("eof_mp3     ");
-  Serial.println(info);
+  // Serial.print("eof_mp3     ");
+  // Serial.println(info);
 
   // special treatment if message was played back: do not proceed with playlist
   if (isMessage) {
-    Serial.println("Message playback ended.");
+    // Serial.println("Message playback ended.");
     isMessage = false;
     return;
   }
@@ -859,7 +854,7 @@ void audio_eof_mp3(const char *info) {  //end of file
   ++track;
   if (track >= playlist.size()) {
     // if no track left: terminate
-    Serial.println("Playlist has ended.");
+    // Serial.println("Playlist has ended.");
     active_card_id = 0;
     lk.unlock();
     powerOff();
@@ -869,7 +864,7 @@ void audio_eof_mp3(const char *info) {  //end of file
 }
 
 /**************************************************************************************************************/
-
+/*
 void audio_info(const char *info) {
   Serial.print("info        ");
   Serial.println(info);
@@ -910,7 +905,7 @@ void audio_eof_speech(const char *info) {
   Serial.print("eof_speech  ");
   Serial.println(info);
 }
-
+*/
 /**************************************************************************************************************/
 
 
@@ -950,7 +945,7 @@ String urlencode(String str) {
 void limitRuntime(void *p) {
   // Extra safety: limit maximum running time
   delay(1000 * 60 * runMaxMinutes);
-  Serial.println("Maximum running time exceeded");
+  // Serial.println("Maximum running time exceeded");
   powerOff();
 }
 
@@ -958,15 +953,5 @@ void limitRuntime(void *p) {
 /**************************************************************************************************************/
 
 void loop() {
-/*  
-  Serial.print("MainLoop: ");
-  Serial.println(uxTaskGetStackHighWaterMark(hMainLoop));
-  Serial.print("AudioLoop: ");
-  Serial.println(uxTaskGetStackHighWaterMark(hAudioLoop));
-  Serial.print("Update: ");
-  Serial.println(uxTaskGetStackHighWaterMark(hUpdate));
-  Serial.print("LimitRuntime: ");
-  Serial.println(uxTaskGetStackHighWaterMark(hLimitRuntime));
-*/
   delay(100);
 }

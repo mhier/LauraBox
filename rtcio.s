@@ -12,7 +12,7 @@
 
 #define ADC_CH_VBATT         0       // GPIO 36, ADC1 CH0
 #define ADC_OVRSMP           10      // oversamping factor, as a result we have roughly 6000 counts per Volt (need to keep numbers below 32767)
-#define VBATT_MIN            20500   // Minimum VBATT to wake up main CPU. Ca. 3.5 V
+#define VBATT_MIN            16915   // Minimum VBATT to wake up main CPU. 23400 = 4.15V ;  3.0 V = 16915
 #define VBATT_LOW_MAXCOUNT   3       // number of consequtive measurements to be below VBATT_MIN to switch off
 
 #define SET_PIN(PIN) WRITE_RTC_REG(RTC_GPIO_OUT_W1TS_REG,RTC_GPIO_OUT_DATA_W1TS_S+PIN,1,1)
