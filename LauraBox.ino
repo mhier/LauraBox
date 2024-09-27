@@ -139,7 +139,7 @@ void disconnectWifi();
 String urlencode(String str);
 
 // Buffer for downloading files
-const int blockSize = 2048;
+const int blockSize = 1024;
 uint8_t buffer[blockSize];
 
 unsigned long idleTime = 0;
@@ -151,7 +151,7 @@ StackType_t xStackMainLoop[sStackMainLoop];
 TaskHandle_t hMainLoop;
 
 StaticTask_t xTcbAudioLoop;
-constexpr size_t sStackAudioLoop{2000};
+constexpr size_t sStackAudioLoop{3000};
 StackType_t xStackAudioLoop[sStackAudioLoop];
 TaskHandle_t hAudioLoop;
 
@@ -197,7 +197,7 @@ void setupOTA() {
       else  // U_SPIFFS
         type = "filesystem";
 
-
+    
       SPIFFS.end();
       Serial.println("Start updating " + type);
     })
@@ -246,7 +246,11 @@ void downloadFile(const String& filename) {
     }
 
     // Save file
+    SD.remove("/" + filename);
     auto f = SD.open("/" + filename, FILE_WRITE);
+    Serial.print("f.availableForWrite() = ");
+    Serial.println(f.availableForWrite());
+    size_t nBytesWritten = 0;
     for(auto i = 0; i < bodyLen; i += blockSize) {
 
       // print progress to serial
@@ -265,7 +269,7 @@ void downloadFile(const String& filename) {
       while (httpClient.available() < nBytesToRead) {
         delay(100);
         if (!httpClient.connected() || ++itocount > 300) {
-          Serial.print("Error downloading '/" + filename + "': timeout.");
+          Serial.println("Error downloading '/" + filename + "': timeout.");
           voiceMessage("error");
           vTaskDelete(NULL);
         }
@@ -275,9 +279,27 @@ void downloadFile(const String& filename) {
       httpClient.read(buffer, nBytesToRead);
 
       // write to SD card
-      f.write(buffer, nBytesToRead);
+      auto nbw = f.write(buffer, nBytesToRead);
+      if(nbw != nBytesToRead) {
+        Serial.print("Error writing '/" + filename + "': tried to write ");
+        Serial.print(nBytesToRead);
+        Serial.print(" but only ");
+        Serial.print(nbw);
+        Serial.print(" bytes written. Size = ");
+        Serial.println(f.size());
+        voiceMessage("error");
+        vTaskDelete(NULL);
+      }
+      nBytesWritten += nbw;
     }
+    f.flush();
+    Serial.print("f.size() = ");
+    Serial.print(f.size());
+    Serial.print(" == ");
+    Serial.println(nBytesWritten);
+    delay(1);
     f.close();
+    delay(1);
   }
   else {
     Serial.print("Error downloading '/");
@@ -323,14 +345,18 @@ void updatePlaylists(void *parameter = nullptr) {
     size_t tracksize = line.substring(0, separator).toInt();
     String track = line.substring(separator+1);
 
-    Serial.print("Checking track "+track);
-
+    Serial.print("Checking track "+track+" (");
+    Serial.print(tracksize);
+    Serial.print(")");
+    
     // check if file needs to be downloaded (does not exist or size differs)
     bool download = false;
     if(SD.exists("/" + track)) {
       auto f = SD.open("/" + track, FILE_READ);
       if(f.size() != tracksize) {
-        Serial.println(" -> size mismatch, downloading...");
+        Serial.print(" -> size mismatch:");
+        Serial.print(f.size());
+        Serial.println(" downloading...");
         download = true;
       }
       else {
@@ -349,7 +375,6 @@ void updatePlaylists(void *parameter = nullptr) {
     }
     
     if(download) {
-      // Play message
       downloadFile(track);
     }
 
@@ -590,7 +615,7 @@ void voiceMessage(String file) {
 
   {
     //std::lock_guard<std::recursive_mutex> lk(mx_audio);
-    audio.setVolume(2);
+    audio.setVolume(3);
     audio.connecttoFS(SPIFFS, (file + ".mp3").c_str());
   }
   while (audio.isRunning()) delay(1);
@@ -696,7 +721,8 @@ void runMainLoop(void *) {
     if (detected_card_id == updateCard) {
       if (!isUpdateMode) {
         setupOTA();
-        hUpdate = xTaskCreateStaticPinnedToCore(updatePlaylists, "updatePlaylists", sStackUpdate, NULL, 0, xStackUpdate, &xTcbUpdate, 0);
+        // Priority must be high, otherwise SD card writes get interrupted and fail. Don't share core with audio loop!
+        hUpdate = xTaskCreateStaticPinnedToCore(updatePlaylists, "updatePlaylists", sStackUpdate, NULL, 3, xStackUpdate, &xTcbUpdate, 1);
       }
       continue;
     }
@@ -869,7 +895,7 @@ void audio_eof_mp3(const char *info) {  //end of file
 }
 
 /**************************************************************************************************************/
-
+/*
 void audio_info(const char *info) {
   Serial.print("info        ");
   Serial.println(info);
@@ -910,7 +936,7 @@ void audio_eof_speech(const char *info) {
   Serial.print("eof_speech  ");
   Serial.println(info);
 }
-
+*/
 /**************************************************************************************************************/
 
 
@@ -967,6 +993,12 @@ void loop() {
   Serial.println(uxTaskGetStackHighWaterMark(hUpdate));
   Serial.print("LimitRuntime: ");
   Serial.println(uxTaskGetStackHighWaterMark(hLimitRuntime));
-*/
-  delay(100);
+  Serial.print("Heap free: ");
+  Serial.println(heap_caps_get_free_size(MALLOC_CAP_8BIT));
+  Serial.print("Heap free min: ");
+  Serial.println(heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+  Serial.print("Heap free lagest block: ");
+  Serial.println(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+//*/
+  delay(10000);
 }
